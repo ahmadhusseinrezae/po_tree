@@ -75,55 +75,6 @@ splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKe
             end
     end.
 
-splitLeaf(Key, Val, Ver, {T, nil, nil, _Versions, KeyO, b, leaf}, EtsTable) ->
-    [{_, VerData} | RestT] = T,
-    NewVerT = insertToListB(Key, Val, VerData),
-    {NewKey, _} = lists:nth(?Order div 2, NewVerT),
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, [{Ver, NewVerT}] ++ RestT, NewKey),
-    {LeftT, RightT} = lists:split(?Order div 2, NewVerT),
-    {RightKey, _} = lists:nth(1, RightT),
-    {LeftKey, _} = lists:nth(1, LeftT),
-    LeftB = {LeftData, nil, RightKey, LeftVers},
-    RightB = {RightData, LeftKey, nil, RightVers},
-    ets:delete(EtsTable, KeyO),
-    ets:insert(EtsTable, {LeftKey, LeftB}),
-    ets:insert(EtsTable, {RightKey, RightB}),
-    {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r};
-
-splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, nil, _Versions, KeyO, b, leaf}, EtsTable) ->
-    [{_, VerData} | RestT] = T,
-    NewVerT = insertToListB(Key, Val, VerData),
-    {NewKey, _} = lists:nth(?Order div 2, NewVerT),
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, [{Ver, NewVerT}] ++ RestT, NewKey),
-    {LeftT, RightT} = lists:split(?Order div 2, NewVerT),
-    {RightKey, _} = lists:nth(1, RightT),
-    {LeftKey, _} = lists:nth(1, LeftT),
-    LeftB = {LeftData, OriginalLeftKey, RightKey, LeftVers},
-    RightB = {RightData, LeftKey, nil, RightVers},
-    ets:delete(EtsTable, KeyO),
-    ets:insert(EtsTable, {LeftKey, LeftB}),
-    ets:insert(EtsTable, {RightKey, RightB}),
-    [{_,{OLT, OLL, _OLR, OLV}}] = ets:lookup(EtsTable, OriginalLeftKey),
-    ets:insert(EtsTable, {OriginalLeftKey, {OLT, OLL, LeftKey, OLV}}),
-    {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r};
-
-splitLeaf(Key, Val, Ver, {T, nil, OriginalRightKey, _Versions, KeyO, b, leaf}, EtsTable) ->
-    [{_, VerData} | RestT] = T,
-    NewVerT = insertToListB(Key, Val, VerData),
-    {NewKey, _} = lists:nth(?Order div 2, NewVerT),
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, [{Ver, NewVerT}] ++ RestT, NewKey),
-    {LeftT, RightT} = lists:split(?Order div 2, NewVerT),
-    {RightKey, _} = lists:nth(1, RightT),
-    {LeftKey, _} = lists:nth(1, LeftT),
-    LeftB = {LeftData, nil, RightKey, LeftVers},
-    RightB = {RightData, LeftKey, OriginalRightKey, RightVers},
-    ets:delete(EtsTable, KeyO),
-    ets:insert(EtsTable, {LeftKey, LeftB}),
-    ets:insert(EtsTable, {RightKey, RightB}),
-    [{_,{OLT, _OLL, OLR, OLV}}] = ets:lookup(EtsTable, OriginalRightKey),
-    ets:insert(EtsTable, {OriginalRightKey, {OLT, RightKey, OLR, OLV}}),
-    {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r};
-
 splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO, b, leaf}, EtsTable) ->
     [{_, VerData} | RestT] = T,
     NewVerT = insertToListB(Key, Val, VerData),
@@ -137,11 +88,22 @@ splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO,
     ets:delete(EtsTable, KeyO),
     ets:insert(EtsTable, {LeftKey, LeftB}),
     ets:insert(EtsTable, {RightKey, RightB}),
-    [{_,{OLT, OLL, _OLR, OLV}}] = ets:lookup(EtsTable, OriginalLeftKey),
-    ets:insert(EtsTable, {OriginalLeftKey, {OLT, OLL, LeftKey, OLV}}),
-    [{_,{ORT, _ORL, ORR, ORV}}] = ets:lookup(EtsTable, OriginalRightKey),
-    ets:insert(EtsTable, {OriginalRightKey, {ORT, RightKey, ORR, ORV}}),
+    updateOriginalLeftLeaf(EtsTable, LeftKey, OriginalLeftKey),
+    updateOriginalRightLeaf(EtsTable, RightKey, OriginalRightKey),
     {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r}.
+
+
+updateOriginalLeftLeaf(_EtsTable, _NewRightKey, nil) ->
+    ok;
+updateOriginalLeftLeaf(EtsTable, NewRightKey, OriginalLeftKey) ->
+    [{_,{OLT, OLL, _OLR, OLV}}] = ets:lookup(EtsTable, OriginalLeftKey),
+    ets:insert(EtsTable, {OriginalLeftKey, {OLT, OLL, NewRightKey, OLV}}).
+
+updateOriginalRightLeaf(_EtsTable, _NewLeftKey, nil) ->
+    ok;
+updateOriginalRightLeaf(EtsTable, NewLeftKey, OriginalRightKey) ->
+    [{_,{ORT, _ORL, ORR, ORV}}] = ets:lookup(EtsTable, OriginalRightKey),
+    ets:insert(EtsTable, {OriginalRightKey, {ORT, NewLeftKey, ORR, ORV}}).
 
 
 splitLeafInRemove({ _DeadL, DeadR, DeadKey},{T, OriginalLeftKey, _OriginalRightKey, _Versions, Key}, NewKey, EtsTable, to_right) ->
