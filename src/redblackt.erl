@@ -1,6 +1,6 @@
 -module(redblackt).
 
--export([insert/5, insertToListB/3, lookup/4, findLeaf/2, getGreaterThan/2, getLessThan/3, getRange/5, findMostLeftLeafKey/1, delete/4,
+-export([insert/5, insertToListB/3, lookup/4, findLeaf/2, getGreaterThan/2, getLessThan/3, getRange/5, findMostLeftLeafKey/1,
     findSplitPoint/2, splitData/3, get_greatest_lower_index/2, get_greatest_lower_version/2, merge/4, appendData/3, removeFromLeaf/6, removeFromTree/5, remove/5]).
 -define(Order, 4).
 
@@ -55,26 +55,6 @@ balance({L, {{L3 , R3, Key3, r}, R2, Key2, r}, Key, b}) ->
 balance({L, R, Key, C}) ->
     {L, R, Key, C}.
 
-splitData({LeftVers, LeftData, RightVers, RightData}, [], _SplitKey) ->
-    {lists:reverse(LeftVers), lists:reverse(LeftData), lists:reverse(RightVers), lists:reverse(RightData)};
-splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKey) ->
-    SplitPoint = findSplitPoint(SplitKey, Data),
-    case SplitPoint == 0 of
-        true ->
-            splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver, Data}] ++ RightData}, T, SplitKey);
-        false ->
-            case lists:split(SplitPoint, Data) of
-                {[], []} ->
-                    splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey);
-                {Left, []} ->
-                    splitData({[Ver] ++ LeftVers, [{Ver, Left}] ++ LeftData, RightVers, RightData}, T, SplitKey);
-                {[], Right} ->
-                    splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver,Right}] ++ RightData}, T, SplitKey);
-                {Left, Right} ->
-                    splitData({[Ver] ++ LeftVers, [{Ver, Left}] ++ LeftData, [Ver] ++ RightVers, [{Ver,Right}] ++ RightData}, T, SplitKey)
-            end
-    end.
-
 splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO, b, leaf}, EtsTable) ->
     [{_, VerData} | RestT] = T,
     NewVerT = insertToListB(Key, Val, VerData),
@@ -92,6 +72,61 @@ splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO,
     updateOriginalRightLeaf(EtsTable, RightKey, OriginalRightKey),
     {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r}.
 
+splitData({LeftVers, LeftData, RightVers, RightData}, [], _SplitKey) ->
+    {lists:reverse(LeftVers), lists:reverse(LeftData), lists:reverse(RightVers), lists:reverse(RightData)};
+splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKey) ->
+    SplitPoint = findSplitPoint(SplitKey, Data),
+    case SplitPoint == 0 of
+        true ->
+            case compareList(Data, RightData) of
+                false ->
+                    splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver, Data}] ++ RightData}, T, SplitKey);
+                true ->
+                    splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
+            end;
+        false ->
+            case lists:split(SplitPoint, Data) of
+                {[], []} ->
+                    splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey);
+                {Left, []} ->
+                    case compareList(Left, LeftData) of
+                        false ->
+                            splitData({[Ver] ++ LeftVers, [{Ver, Left}] ++ LeftData, RightVers, RightData}, T, SplitKey);
+                        true ->
+                            splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
+                    end;
+                {[], Right} ->
+                    case compareList(Right, RightData) of
+                        false ->
+                            splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver,Right}] ++ RightData}, T, SplitKey);
+                        true ->
+                            splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
+                    end;
+                {Left, Right} ->
+                    case compareList(Left, LeftData) of
+                        false ->
+                            NewLeftVers = [Ver] ++ LeftVers,
+                            NewLeftData = [{Ver, Left}] ++ LeftData;
+                        true ->
+                            NewLeftVers = LeftVers,
+                            NewLeftData = LeftData
+                    end,
+                    case compareList(Right, RightData) of
+                        false ->
+                            NewRightVers = [Ver] ++ RightVers,
+                            NewRightData = [{Ver,Right}] ++ RightData;
+                        true ->
+                            NewRightVers = RightVers,
+                            NewRightData = RightData
+                    end,
+
+                    splitData({NewLeftVers, NewLeftData, NewRightVers, NewRightData}, T, SplitKey)
+            end
+    end.
+compareList(_List, []) ->
+    false;
+compareList(List, [{_Ver2, Data2} | _T]) ->
+    List =:= Data2.
 
 updateOriginalLeftLeaf(_EtsTable, _NewRightKey, nil) ->
     ok;
@@ -256,17 +291,17 @@ findLeaf(Key, {_L, R, Key2, _C}) when Key > Key2 ->
 removeFromTree(_Key, _Val, _Ver, {nil, b}, _Table) ->
     {nil, b};
 removeFromTree(Key, Val, Ver,  {_KeyLf, b, leaf} = Leaf, Table) ->
-    removeFromLeaf(Key, Val, Ver, Leaf, Table, self); %% TODO
+    removeFromLeaf(Key, Val, Ver, Leaf, Table, self);
 removeFromTree(Key, Val, Ver,  {{_KeyLf, b, leaf}, _R, Key2, _C} = Node, Table) when Key < Key2 ->
-    removeFromLeaf(Key, Val, Ver, Node, Table, left); %% TODO
+    removeFromLeaf(Key, Val, Ver, Node, Table, left);
 removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key < Key2 ->
    balance({removeFromTree(Key, Val, Ver, L, Table), R, Key2, C});
 removeFromTree(Key, Val, Ver, {{_KeyLf, b, leaf}, _R, Key2, _C} = Node, Table) when Key == Key2 ->
-    removeFromLeaf(Key, Val, Ver, Node, Table, left); %% TODO
+    removeFromLeaf(Key, Val, Ver, Node, Table, left);
 removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key == Key2 ->
     balance({removeFromTree(Key, Val, Ver, L, Table), R, Key2, C});
 removeFromTree(Key, Val, Ver, {_L, {_KeyLf, b, leaf}, Key2, _C} = Node, Table) when Key > Key2 ->
-    removeFromLeaf(Key, Val, Ver, Node, Table, right); %% TODO
+    removeFromLeaf(Key, Val, Ver, Node, Table, right);
 removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key > Key2 ->
     balance({L, removeFromTree(Key, Val, Ver, R, Table), Key2, C}).
 
@@ -296,7 +331,7 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
             ets:insert(Table, {LeafKey, B}),
             case isItUnderflow([{LastVer, NewData}] ++ T) of
                 true ->
-                    %% TODO Merge it
+                    %% Merge it
                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                     %% 2- merge the new B (Which is L) to R
                     merge(Table, LeafKey, {[{LastVer, NewData}] ++ T, LeafL, LeafR, V}, R);
@@ -317,7 +352,7 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
             ets:insert(Table, {LeafKey, B}),
             case isItUnderflow([{LastVer, NewData}] ++ T) of
                 true ->
-                    %% TODO Merge it
+                    %% Merge it
                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                     %% 2- merge the new B (Which is L) to R
                     merge(Table, LeafKey, {[{LastVer, NewData}] ++ T, LeafL, LeafR, V}, L);
@@ -581,19 +616,6 @@ insertToListSameValue(RowId, [RowId2 | T]) when RowId2 =/= RowId ->
 remove(Key, Val, Ver, Tree, Table) ->
     makeRootBlack(removeFromTree(Key, Val, Ver, Tree, Table)).
 
-%% TODO This is wrong, should be changed
-%% for the deletion, we only remove the corresponding record, and will not remove or change the leaf id
-%% even if the leaf id is equal to removable key because it will not make the algorithm incorrect.
-%% still need to check if this behavior has any effect for the time when we splite the leaf, maybe then we look for some key which already has been removed!!!
-delete(Key, RowId, Tree, Table) ->
-    {LeafKey, b, leaf} = findLeaf(Key, Tree),
-    [{_,{T, L, R, V}}] = ets:lookup(Table, LeafKey),
-    NewT = binaryFindDelete(Key, RowId, T),
-    B = {NewT, L, R, V},
-    ets:insert(Table, {LeafKey, B}),
-    Tree.
-
-
 binaryFindDelete(_Key, _RowId, []) ->
     [];
 binaryFindDelete(Key, _RowId, [{Key2, _Val2}]) when Key2 < Key ->
@@ -632,62 +654,4 @@ makeRootBlack({Key,_C,leaf}) ->
 makeRootBlack({L, R, Key, _C}) ->
     {L, R, Key, b}.
 
-
-%%get_key(Key, Version) ->
-%%    integer_to_list(Key)++"_"++integer_to_list(Version).
-
-
-
-
-
-%%{
-%%    {1,b,leaf},
-%%    {
-%%        {11,b,leaf},
-%%        {
-%%            {13,b,leaf},
-%%            {
-%%                {15,b,leaf},
-%%                {17,b,leaf},16,r
-%%            },14,b
-%%        },
-%%    12,b
-%%    },
-%%8,b}
-
-
-%% [
-%%      {5,
-%%          {
-%%              [
-%%                  {1,
-%%                      [
-%%                          {5,[5]},
-%%                          {6,[6]}
-%%                      ]
-%%                  }
-%%              ]
-%%          ,3,7,
-%%          [1]
-%%          }
-%%      }
-%% ]
-%% [
-%%      {1,
-%%          {
-%%              [
-%%                  {1,
-%%                      [
-%%                          {1,[1]},
-%%                          {2,[2]},
-%%                          {3,[3]},
-%%                          {4,[4]}
-%%                      ]
-%%                  }
-%%              ]
-%%          ,nil,5,
-%%          [1]
-%%          }
-%%      }
-%% ]
 
