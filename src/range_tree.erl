@@ -50,19 +50,37 @@ handle_call(clean_store, _From, #state{index = _Index, table = Table}) ->
   {reply, ok, #state{index = {nil,b}, table = Table}};
 
 handle_call({insert_record, {RowId, Val, Ver}}, _From, #state{index = Index, table = Table} = State) ->
-  NewIndex = redblackt:insert(Val, RowId, Ver, Index, Table),
-  {reply, ok, State#state{index = NewIndex, table = Table}};
+  try redblackt:insert(Val, RowId, Ver, Index, Table) of
+    NewIndex ->
+      {reply, ok, State#state{index = NewIndex, table = Table}}
+  catch
+    throw:Throw -> {reply, Throw, State};
+    error:Error -> {reply, Error, State};
+    _:Exception -> {reply, Exception, State}
+  end;
 
 handle_call({remove, RowId, Val, Ver}, _From, #state{index = Index, table = Table} = State) ->
-  NewIndex = redblackt:remove(Val, RowId, Ver, Index, Table),
-  {reply, ok, State#state{index = NewIndex, table = Table}};
+  try redblackt:remove(Val, RowId, Ver, Index, Table) of
+    NewIndex ->
+      {reply, ok, State#state{index = NewIndex, table = Table}}
+  catch
+    throw:Throw -> {reply, Throw, State};
+    error:Error -> {reply, Error, State};
+    _:Exception -> {reply, Exception, State}
+  end;
 
 handle_call(tree, _From, #state{index = Index} = State) ->
   {reply, Index, State};
 
 handle_call({get_range, Min, Max, _, _, Version}, _From, #state{index = Index, table = Table} = State) ->
-  Res = redblackt:getRange(Min, Max, Index, Table, Version),
-  {reply, Res, State}.
+  try redblackt:getRange(Min, Max, Index, Table, Version) of
+    Res ->
+      {reply, Res, State}
+  catch
+    throw:Throw -> {reply, Throw, State};
+    error:Error -> {reply, Error, State};
+    _:Exception -> {reply, Exception, State}
+  end.
 
 handle_cast(stop, State) ->
   io:format("Stopping the server ~n"),
