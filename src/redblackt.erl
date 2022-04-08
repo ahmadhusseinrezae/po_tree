@@ -11,7 +11,7 @@ insertTo(Key, Val, Ver, {nil, b}, EtsTable) ->
     B = {[{Ver, [{Key, [Val]}]}], nil, nil, [Ver]},
     ets:insert(EtsTable, {Key, B}),
     {Key, b, leaf};
-    
+
 insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
     [{_,{Data, Left, Right, Versions}}]  = ets:lookup(EtsTable, KeyO),
     [LastVer |_] = Versions,
@@ -22,8 +22,14 @@ insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
                 true ->
                     splitLeaf(Key, Val, Ver, {Data, Left, Right, Versions, KeyO, b, leaf}, EtsTable);
                 false ->
-                    ets:insert(EtsTable, {KeyO, { [{Ver, insertToListB(Key, Val, VerData)}] ++ T, Left, Right, Versions}}),
-                    {KeyO, C, leaf}
+                    NewVerData = insertToListB(Key, Val, VerData),
+                    case NewVerData == VerData of
+                        true ->
+                            {KeyO, C, leaf};
+                        false ->
+                            ets:insert(EtsTable, {KeyO, { [{Ver, NewVerData}] ++ T, Left, Right, Versions}}),
+                            {KeyO, C, leaf}
+                    end
             end;
         false ->
             case LastVer > Ver of %% It is now allowed to update old versions (Partial persistent)
@@ -31,8 +37,15 @@ insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
                     {KeyO, C, leaf};
                 false ->
                     [{_, LastVerData} | _T] = Data,  %% Add new element to payload of last version
-                    ets:insert(EtsTable, {KeyO, { [{Ver, insertToListB(Key, Val, LastVerData)}]++ Data, Left, Right, [Ver] ++ Versions}}),
-                    {KeyO, C, leaf}
+                    NewVerData = insertToListB(Key, Val, LastVerData),
+                    case NewVerData == LastVerData of
+                        true ->
+                            {KeyO, C, leaf};
+                        false ->
+                            ets:insert(EtsTable, {KeyO, { [{Ver, NewVerData}]++ Data, Left, Right, [Ver] ++ Versions}}),
+                            {KeyO, C, leaf}
+                    end
+
             end
     end;
 
@@ -276,7 +289,7 @@ getNextUntil(Until, Key, EtsTable, MaxVersion) when Key < Until ->
             lists:append(Data, getNextUntil(Until, NextKey, EtsTable, MaxVersion))
     end.
 
-findLeaf(_Key, {nil, b}) -> 
+findLeaf(_Key, {nil, b}) ->
     nil;
 findLeaf(_Key, {_KeyLf, b, leaf} = Leaf) ->
     Leaf;
@@ -295,7 +308,7 @@ removeFromTree(Key, Val, Ver,  {_KeyLf, b, leaf} = Leaf, Table) ->
 removeFromTree(Key, Val, Ver,  {{_KeyLf, b, leaf}, _R, Key2, _C} = Node, Table) when Key < Key2 ->
     removeFromLeaf(Key, Val, Ver, Node, Table, left);
 removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key < Key2 ->
-   balance({removeFromTree(Key, Val, Ver, L, Table), R, Key2, C});
+    balance({removeFromTree(Key, Val, Ver, L, Table), R, Key2, C});
 removeFromTree(Key, Val, Ver, {{_KeyLf, b, leaf}, _R, Key2, _C} = Node, Table) when Key == Key2 ->
     removeFromLeaf(Key, Val, Ver, Node, Table, left);
 removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key == Key2 ->
@@ -311,7 +324,20 @@ removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
     [{LastVer, VerData} | T] = Data,
     case LastVer == Ver of
         false ->
-            Tree;
+            case Ver > LastVer of
+                true ->
+                    NewData = binaryFindDelete(Key, Val, VerData),
+                    case NewData == VerData of
+                        true ->
+                            Tree;
+                        false ->
+                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+                            ets:insert(Table, {LeafKey, B}),
+                            Tree
+                    end;
+                false ->
+                    Tree
+            end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
             B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
@@ -324,7 +350,28 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
     [{LastVer, VerData} | T] = Data,
     case LastVer == Ver of
         false ->
-            Tree;
+            case Ver > LastVer of
+                true ->
+                    NewData = binaryFindDelete(Key, Val, VerData),
+                    case NewData == VerData of
+                        true ->
+                            Tree;
+                        false ->
+                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+                            ets:insert(Table, {LeafKey, B}),
+                            case isItUnderflow([{Ver, NewData}] ++ [{LastVer, VerData}] ++ T) of
+                                true ->
+                                    %% Merge it
+                                    %% 1- remove the ParentKey, (It will be removed just by ignoring it)
+                                    %% 2- merge the new B (Which is L) to R
+                                    merge(Table, LeafKey, {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, V}, R);
+                                false ->
+                                    Tree
+                            end
+                    end;
+                false ->
+                    Tree
+            end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
             B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
@@ -345,7 +392,28 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
     [{LastVer, VerData} | T] = Data,
     case LastVer == Ver of
         false ->
-            Tree;
+            case Ver > LastVer of
+                true ->
+                    NewData = binaryFindDelete(Key, Val, VerData),
+                    case NewData == VerData of
+                        true ->
+                            Tree;
+                        false ->
+                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+                            ets:insert(Table, {LeafKey, B}),
+                            case isItUnderflow([{Ver, NewData}] ++ [{LastVer, VerData}] ++ T) of
+                                true ->
+                                    %% Merge it
+                                    %% 1- remove the ParentKey, (It will be removed just by ignoring it)
+                                    %% 2- merge the new B (Which is L) to R
+                                    merge(Table, LeafKey, {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, V}, L);
+                                false ->
+                                    Tree
+                            end
+                    end;
+                false ->
+                    Tree
+            end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
             B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
@@ -566,7 +634,7 @@ findSplitPoint(Key, L) ->
             end
     end.
 
-binarySearch(_Key, []) -> 
+binarySearch(_Key, []) ->
     {};
 binarySearch(Key, [{Key2, _Val2}]) when Key2 < Key ->
     {};
@@ -578,14 +646,14 @@ binarySearch(Key, L) ->
     N = length(L) div 2,
     {Left, Right} = lists:split(N, L),
     {Nth,_} = lists:nth(N, L),
-    case Nth >= Key of 
-        true -> 
+    case Nth >= Key of
+        true ->
             binarySearch(Key, Left);
-        false -> 
+        false ->
             binarySearch(Key, Right)
     end.
 
-insertToListB(Key, Val, []) -> 
+insertToListB(Key, Val, []) ->
     [{Key, [Val]}];
 insertToListB(Key, Val, [{Key2, Val2}]) when Key2 < Key ->
     [{Key2, Val2}, {Key, [Val]}];
@@ -597,10 +665,10 @@ insertToListB(Key, Val, L) ->
     N = length(L) div 2,
     {Left, Right} = lists:split(N, L),
     {Nth,_} = lists:nth(N, L),
-    case Nth >= Key of 
-        true -> 
+    case Nth >= Key of
+        true ->
             insertToListB(Key, Val, Left) ++ Right;
-        false -> 
+        false ->
             Left ++ insertToListB(Key, Val, Right)
     end.
 
@@ -653,5 +721,3 @@ makeRootBlack({Key,_C,leaf}) ->
     {Key,b,leaf};
 makeRootBlack({L, R, Key, _C}) ->
     {L, R, Key, b}.
-
-
