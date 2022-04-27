@@ -15,7 +15,7 @@ insertTo(Key, Val, Ver, {nil, b}, EtsTable) ->
 insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
     [{_,{Data, Left, Right, Versions}}]  = ets:lookup(EtsTable, KeyO),
     [LastVer |_] = Versions,
-    case LastVer =:= Ver of
+    case versions_eq(LastVer, Ver) of
         true ->
             [{_, VerData} | T] = Data,
             case length(VerData) >= ?Order of
@@ -32,7 +32,7 @@ insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
                     end
             end;
         false ->
-            case LastVer > Ver of %% It is now allowed to update old versions (Partial persistent)
+            case versions_gt(LastVer, Ver) of %% It is now allowed to update old versions (Partial persistent)
                 true ->
                     {KeyO, C, leaf};
                 false ->
@@ -322,9 +322,9 @@ removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key > Key2 ->
 removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
     [{LastVer, VerData} | T] = Data,
-    case LastVer == Ver of
+    case versions_eq(LastVer, Ver) of
         false ->
-            case Ver > LastVer of
+            case versions_gt(Ver, LastVer) of
                 true ->
                     NewData = binaryFindDelete(Key, Val, VerData),
                     case NewData == VerData of
@@ -348,9 +348,9 @@ removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
 removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Table , left) ->
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
     [{LastVer, VerData} | T] = Data,
-    case LastVer == Ver of
+    case versions_eq(LastVer, Ver) of
         false ->
-            case Ver > LastVer of
+            case versions_gt(Ver, LastVer) of
                 true ->
                     NewData = binaryFindDelete(Key, Val, VerData),
                     case NewData == VerData of
@@ -390,9 +390,9 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
 removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Table , right) ->
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
     [{LastVer, VerData} | T] = Data,
-    case LastVer == Ver of
+    case versions_eq(LastVer, Ver) of
         false ->
-            case Ver > LastVer of
+            case versions_gt(Ver, LastVer) of
                 true ->
                     NewData = binaryFindDelete(Key, Val, VerData),
                     case NewData == VerData of
@@ -476,31 +476,42 @@ appendData([], ToData, ToVers) ->
 appendData([{FromVer, FromData} | FromT], [], []) ->
     {NewData, NewVers} = appendData(FromT, [], []),
     {[{FromVer, FromData}] ++ NewData, [FromVer]++NewVers};
-appendData([{FromVer, FromData} | FromT], [{_ToVer, ToData} | _ToT] = To, [Ver | _T] = ToVers) when FromVer > Ver ->
-    {NewData, NewVers} = appendData(FromT, To, ToVers),
-    {[{FromVer, ToData ++ FromData}] ++ NewData, [FromVer]++NewVers};
-appendData([{FromVer, FromData} | FromT], [{ToVer, ToData} | ToT], [Ver | T]) when FromVer == Ver ->
-    {NewData, NewVers} = appendData(FromT, ToT, T),
-    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers};
-appendData([{FromVer, FromData} | _FromT] = From, [{ToVer, ToData} | ToT], [Ver | T]) when FromVer < Ver ->
-    {NewData, NewVers} = appendData(From, ToT, T),
-    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers}.
-
+appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [Ver | T] = ToVers) ->
+    case versions_gt(FromVer, Ver) of
+        true ->
+            {NewData, NewVers} = appendData(FromT, To, ToVers),
+            {[{FromVer, ToData ++ FromData}] ++ NewData, [FromVer]++NewVers};
+        false ->
+            case versions_eq(FromVer, Ver) of
+                true ->
+                    {NewData, NewVers} = appendData(FromT, ToT, T),
+                    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers};
+                false ->
+                    {NewData, NewVers} = appendData(From, ToT, T),
+                    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers}
+            end
+    end.
 
 prependData([], ToData, ToVers) ->
     {ToData, ToVers};
 prependData([{FromVer, FromData} | FromT], [], []) ->
     {NewData, NewVers} = prependData(FromT, [], []),
     {[{FromVer, FromData}] ++ NewData, [FromVer]++NewVers};
-prependData([{FromVer, FromData} | FromT], [{_ToVer, ToData} | _ToT] = To, [Ver | _T] = ToVers) when FromVer > Ver ->
-    {NewData, NewVers} = prependData(FromT, To, ToVers),
-    {[{FromVer, FromData ++ ToData}] ++ NewData, [FromVer]++NewVers};
-prependData([{FromVer, FromData} | FromT], [{ToVer, ToData} | ToT], [Ver | T]) when FromVer == Ver ->
-    {NewData, NewVers} = prependData(FromT, ToT, T),
-    {[{ToVer,  FromData ++ ToData}] ++ NewData, [Ver]++NewVers};
-prependData([{FromVer, FromData} | _FromT] = From, [{ToVer, ToData} | ToT], [Ver | T]) when FromVer < Ver ->
-    {NewData, NewVers} = prependData(From, ToT, T),
-    {[{ToVer, FromData ++ ToData}] ++ NewData, [Ver]++NewVers}.
+prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [Ver | T] = ToVers) ->
+    case versions_gt(FromVer, Ver) of
+        true ->
+            {NewData, NewVers} = prependData(FromT, To, ToVers),
+            {[{FromVer, FromData ++ ToData}] ++ NewData, [FromVer]++NewVers};
+        false ->
+            case versions_eq(FromVer, Ver) of
+                true ->
+                    {NewData, NewVers} = prependData(FromT, ToT, T),
+                    {[{ToVer,  FromData ++ ToData}] ++ NewData, [Ver]++NewVers};
+                false ->
+                    {NewData, NewVers} = prependData(From, ToT, T),
+                    {[{ToVer, FromData ++ ToData}] ++ NewData, [Ver]++NewVers}
+            end
+    end.
 
 isItUnderflow([]) ->
     true;
@@ -577,7 +588,7 @@ get_greatest_lower_version(_Key, []) ->
 get_greatest_lower_version(Key, [Nth]) ->
     get_greatest_lower_index(Key, [Nth]);
 get_greatest_lower_version(Key, L) ->
-    case lists:last(L) > Key of
+    case versions_gt(lists:last(L), Key) of
         true ->
             0;
         false ->
@@ -587,7 +598,7 @@ get_greatest_lower_version(Key, L) ->
 get_greatest_lower_index(_Key, []) ->
     0;
 get_greatest_lower_index(Key, [Nth]) ->
-    case Nth =< Key of
+    case versions_lt(Nth, Key) or versions_eq(Nth, Key) of
         true ->
             1;
         false ->
@@ -721,3 +732,11 @@ makeRootBlack({Key,_C,leaf}) ->
     {Key,b,leaf};
 makeRootBlack({L, R, Key, _C}) ->
     {L, R, Key, b}.
+
+
+versions_eq(Ver1, Ver2) ->
+    Ver1 =:= Ver2.
+versions_gt(Ver1, Ver2) ->
+    Ver1 > Ver2.
+versions_lt(Ver1, Ver2) ->
+    Ver1 < Ver2.
