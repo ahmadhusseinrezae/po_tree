@@ -1,7 +1,7 @@
 -module(redblackt).
 
 -export([insert/5, insertToListB/3, lookup/4, findLeaf/2, getGreaterThan/2, getLessThan/3, getRange/5, findMostLeftLeafKey/1,
-    findSplitPoint/2, splitData/3, get_greatest_lower_index/2, get_greatest_lower_version/2, merge/4, appendData/3, removeFromLeaf/6, removeFromTree/5, remove/5]).
+    findSplitPoint/2, splitData/3, get_greatest_lower_index/2, get_greatest_lower_version/2, merge/4, appendData/4, removeFromLeaf/6, removeFromTree/5, remove/5]).
 -define(Order, 4).
 
 insert(Key, Val, Ver, Tree, EtsTable) ->
@@ -241,7 +241,7 @@ updateOriginalRightLeaf(EtsTable, NewLeftKey, OriginalRightKey) ->
 
 
 splitLeafInRemove({ _DeadL, DeadR, DeadKey},{T, OriginalLeftKey, _OriginalRightKey, _Versions, Key}, NewKey, EtsTable, to_right) ->
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, T, NewKey),
+    {LeftVers, LeftData, RightVers, RightData} = splitData({nil, nil, nil, nil}, version_tree:to_list(T), NewKey),
     [{_, [{RightKey, _} | _]} | _] = RightData,
     [{_, [{LeftKey, _} | _]} | _] = LeftData,
     LeftB = {LeftData, OriginalLeftKey, RightKey, LeftVers},
@@ -270,7 +270,7 @@ splitLeafInRemove({ _DeadL, DeadR, DeadKey},{T, OriginalLeftKey, _OriginalRightK
     {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r};
 
 splitLeafInRemove({DeadL, _DeadR, DeadKey},{T, _OriginalLeftKey, OriginalRightKey, _Versions, Key}, NewKey, EtsTable, to_left) ->
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, T, NewKey),
+    {LeftVers, LeftData, RightVers, RightData} = splitData({nil, nil, nil, nil}, version_tree:to_list(T), NewKey),
     [{_, [{RightKey, _} | _]} | _] = RightData,
     [{_, [{LeftKey, _} | _]} | _] = LeftData,
     LeftB = {LeftData, DeadL, RightKey, LeftVers},
@@ -406,8 +406,12 @@ removeFromTree(Key, Val, Ver, {L, R, Key2, C}, Table) when Key > Key2 ->
 
 
 removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
-    [{LastVer, VerData} | T] = Data,
+%%    [{LastVer, VerData} | T] = Data,
+    {LastVer, VerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         false ->
             case versions_gt(Ver, LastVer) of
@@ -417,7 +421,23 @@ removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
                         true ->
                             Tree;
                         false ->
-                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+
+                            NewVerDataLength = length(NewData),
+                            case length(VerData) >= (?Order div 2) of
+                                true ->
+                                    case NewVerDataLength < (?Order div 2) of
+                                        true ->
+                                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                                        false ->
+                                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                                    end;
+                                false ->
+                                    NewVersionLengthIndex = V
+                            end,
+                            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+
+                            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
                             ets:insert(Table, {LeafKey, B}),
                             Tree
                     end;
@@ -426,14 +446,33 @@ removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
             end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
-            B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
+
+            NewVerDataLength = length(NewData),
+            case length(VerData) >= (?Order div 2) of
+                true ->
+                    case NewVerDataLength < (?Order div 2) of
+                        true ->
+                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                        false ->
+                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                    end;
+                false ->
+                    NewVersionLengthIndex = V
+            end,
+            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
             ets:insert(Table, {LeafKey, B}),
             Tree
     end;
 %% left -> means left leaf node is the target leaf
 removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Table , left) ->
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
-    [{LastVer, VerData} | T] = Data,
+%%    [{LastVer, VerData} | T] = Data,
+    {LastVer, VerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         false ->
             case versions_gt(Ver, LastVer) of
@@ -443,14 +482,29 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
                         true ->
                             Tree;
                         false ->
-                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+
+                            NewVerDataLength = length(NewData),
+                            case length(VerData) >= (?Order div 2) of
+                                true ->
+                                    case NewVerDataLength < (?Order div 2) of
+                                        true ->
+                                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                                        false ->
+                                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                                    end;
+                                false ->
+                                    NewVersionLengthIndex = V
+                            end,
+                            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+                            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
                             ets:insert(Table, {LeafKey, B}),
-                            case isItUnderflow([{Ver, NewData}] ++ [{LastVer, VerData}] ++ T) of
+                            case isItUnderflow(NewVersionLengthIndex) of
                                 true ->
                                     %% Merge it
                                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                                     %% 2- merge the new B (Which is L) to R
-                                    merge(Table, LeafKey, {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, V}, R);
+                                    merge(Table, LeafKey, {NewRightVersionIndex, LeafL, LeafR, nil}, R);
                                 false ->
                                     Tree
                             end
@@ -460,22 +514,42 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
             end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
-            B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
+
+            NewVerDataLength = length(NewData),
+            case length(VerData) >= (?Order div 2) of
+                true ->
+                    case NewVerDataLength < (?Order div 2) of
+                        true ->
+                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                        false ->
+                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                    end;
+                false ->
+                    NewVersionLengthIndex = V
+            end,
+            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+
+            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
             ets:insert(Table, {LeafKey, B}),
-            case isItUnderflow([{LastVer, NewData}] ++ T) of
+            case isItUnderflow(NewVersionLengthIndex) of
                 true ->
                     %% Merge it
                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                     %% 2- merge the new B (Which is L) to R
-                    merge(Table, LeafKey, {[{LastVer, NewData}] ++ T, LeafL, LeafR, V}, R);
+                    merge(Table, LeafKey, {NewRightVersionIndex, LeafL, LeafR, nil}, R);
                 false ->
                     Tree
             end
     end;
 %% right -> means right leaf node is the target leaf
 removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Table , right) ->
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
-    [{LastVer, VerData} | T] = Data,
+%%    [{LastVer, VerData} | T] = Data,
+    {LastVer, VerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         false ->
             case versions_gt(Ver, LastVer) of
@@ -485,14 +559,30 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
                         true ->
                             Tree;
                         false ->
-                            B = {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, [Ver] ++ V},
+
+                            NewVerDataLength = length(NewData),
+                            case length(VerData) >= (?Order div 2) of
+                                true ->
+                                    case NewVerDataLength < (?Order div 2) of
+                                        true ->
+                                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                                        false ->
+                                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                                    end;
+                                false ->
+                                    NewVersionLengthIndex = V
+                            end,
+                            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+
+                            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
                             ets:insert(Table, {LeafKey, B}),
-                            case isItUnderflow([{Ver, NewData}] ++ [{LastVer, VerData}] ++ T) of
+                            case isItUnderflow(NewVersionLengthIndex) of
                                 true ->
                                     %% Merge it
                                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                                     %% 2- merge the new B (Which is L) to R
-                                    merge(Table, LeafKey, {[{Ver, NewData}] ++ [{LastVer, VerData}] ++ T, LeafL, LeafR, V}, L);
+                                    merge(Table, LeafKey, {NewRightVersionIndex, LeafL, LeafR, nil}, L);
                                 false ->
                                     Tree
                             end
@@ -502,14 +592,30 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
             end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
-            B = {[{LastVer, NewData}] ++ T, LeafL, LeafR, V},
+
+            NewVerDataLength = length(NewData),
+            case length(VerData) >= (?Order div 2) of
+                true ->
+                    case NewVerDataLength < (?Order div 2) of
+                        true ->
+                            NewVersionLengthIndex = version_tree:remove(Ver, V);
+                        false ->
+                            NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, V, VersionLengthIndexFun, 0)
+                    end;
+                false ->
+                    NewVersionLengthIndex = V
+            end,
+            NewRightVersionIndex = version_tree:insert(Ver, NewData, Data, VersionIndexInsertionFun, []),
+
+
+            B = {NewRightVersionIndex, LeafL, LeafR, NewVersionLengthIndex},
             ets:insert(Table, {LeafKey, B}),
-            case isItUnderflow([{LastVer, NewData}] ++ T) of
+            case isItUnderflow(NewVersionLengthIndex) of
                 true ->
                     %% Merge it
                     %% 1- remove the ParentKey, (It will be removed just by ignoring it)
                     %% 2- merge the new B (Which is L) to R
-                    merge(Table, LeafKey, {[{LastVer, NewData}] ++ T, LeafL, LeafR, V}, L);
+                    merge(Table, LeafKey, {NewRightVersionIndex, LeafL, LeafR, nil}, L);
                 false ->
                     Tree
             end
@@ -517,8 +623,12 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
 
 merge(Table, Key, {DeadData, DeadL, DeadR, _DeadVers}, {ToLeafKey, b, leaf}) when Key > ToLeafKey ->
     [{_,{ToData, L, R, ToVers}}] = ets:lookup(Table, ToLeafKey),
-    {NewToData, NewToVers} = appendData(DeadData, ToData, ToVers),
-    case isItOverflow(NewToData) of
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,
+    {NewToD, NewToV, IsOverflow} = appendData(version_tree:to_list(DeadData), version_tree:to_list(ToData), version_tree:to_list(ToVers), false),
+    NewToData = version_tree:from_list(NewToD, VersionIndexInsertionFun, []),
+    NewToVers = version_tree:from_list(NewToV, VersionLengthIndexFun, 0),
+    case IsOverflow of
         {true, NewParentKey} ->
             splitLeafInRemove({ DeadL, DeadR, Key},{NewToData, L, R, NewToVers, ToLeafKey}, NewParentKey, Table, to_right);
         false ->
@@ -535,8 +645,12 @@ merge(Table, Key, {DeadData, DeadL, DeadR, _DeadVers}, {ToLeafKey, b, leaf}) whe
     end;
 merge(Table, Key, {DeadData, DeadL, DeadR, _DeadVers}, {ToLeafKey, b, leaf}) when Key =< ToLeafKey ->
     [{_,{ToData, L, R, ToVers}}] = ets:lookup(Table, ToLeafKey),
-    {NewToData, NewToVers} = prependData(DeadData, ToData, ToVers),
-    case isItOverflow(NewToData) of
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,
+    {NewToD, NewToV, IsOverflow} = prependData(version_tree:to_list(DeadData), version_tree:to_list(ToData), version_tree:to_list(ToVers), false),
+    NewToData = version_tree:from_list(NewToD, VersionIndexInsertionFun, []),
+    NewToVers = version_tree:from_list(NewToV, VersionLengthIndexFun, 0),
+    case IsOverflow of
         {true, NewParentKey} ->
             splitLeafInRemove({ DeadL, DeadR, Key},{NewToData, L, R, NewToVers, ToLeafKey}, NewParentKey, Table, to_left);
         false ->
@@ -557,68 +671,112 @@ merge(Table, Key, DeadLeaf, {L, R, Key2, C}) when Key > Key2 ->
     balance({L, merge(Table, Key, DeadLeaf, R), Key2, C}).
 
 
-appendData([], ToData, ToVers) ->
-    {ToData, ToVers};
-appendData([{FromVer, FromData} | FromT], [], []) ->
-    {NewData, NewVers} = appendData(FromT, [], []),
-    {[{FromVer, FromData}] ++ NewData, [FromVer]++NewVers};
-appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [Ver | T] = ToVers) ->
+appendData([], ToData, ToVers, IsOverflow) ->
+    {ToData, ToVers, IsOverflow};
+appendData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
+    {NewData, NewVers, NewIsOverflow} = appendData(FromT, [], [], IsOverflow),
+    NewVerLength = length(FromData),
+    case NewVerLength >= (?Order div 2) of
+        true ->
+            NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+        false ->
+            NewVersionLength = NewVers
+    end,
+    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
+appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [{Ver, _} | T] = ToVers, IsOverflow) ->
     case versions_gt(FromVer, Ver) of
         true ->
-            {NewData, NewVers} = appendData(FromT, To, ToVers),
-            {[{FromVer, ToData ++ FromData}] ++ NewData, [FromVer]++NewVers};
+            {NewData, NewVers, NewIsOverflow} = appendData(FromT, To, ToVers, IsOverflow),
+            CombinedData = ToData ++ FromData,
+            NewVerLength = length(CombinedData),
+            case NewVerLength >= (?Order div 2) of
+                true ->
+                    NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+                false ->
+                    NewVersionLength = NewVers
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
         false ->
             case versions_eq(FromVer, Ver) of
                 true ->
-                    {NewData, NewVers} = appendData(FromT, ToT, T),
-                    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers};
+                    {NewData, NewVers, NewIsOverflow} = appendData(FromT, ToT, T, IsOverflow),
+                    CombinedData = ToData ++ FromData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
                 false ->
-                    {NewData, NewVers} = appendData(From, ToT, T),
-                    {[{ToVer, ToData ++ FromData}] ++ NewData, [Ver]++NewVers}
+                    {NewData, NewVers, NewIsOverflow} = appendData(From, ToT, T, IsOverflow),
+                    CombinedData = ToData ++ FromData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)}
             end
     end.
 
-prependData([], ToData, ToVers) ->
-    {ToData, ToVers};
-prependData([{FromVer, FromData} | FromT], [], []) ->
-    {NewData, NewVers} = prependData(FromT, [], []),
-    {[{FromVer, FromData}] ++ NewData, [FromVer]++NewVers};
-prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [Ver | T] = ToVers) ->
+prependData([], ToData, ToVers, IsOverflow) ->
+    {ToData, ToVers, IsOverflow};
+prependData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
+    {NewData, NewVers, NewIsOverflow} = prependData(FromT, [], [], IsOverflow),
+    NewVerLength = length(FromData),
+    case NewVerLength >= (?Order div 2) of
+        true ->
+            NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+        false ->
+            NewVersionLength = NewVers
+    end,
+    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
+prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [{Ver, _} | T] = ToVers, IsOverflow) ->
     case versions_gt(FromVer, Ver) of
         true ->
-            {NewData, NewVers} = prependData(FromT, To, ToVers),
-            {[{FromVer, FromData ++ ToData}] ++ NewData, [FromVer]++NewVers};
+            {NewData, NewVers, NewIsOverflow} = prependData(FromT, To, ToVers, IsOverflow),
+            CombinedData = FromData ++ ToData,
+            NewVerLength = length(CombinedData),
+            case NewVerLength >= (?Order div 2) of
+                true ->
+                    NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+                false ->
+                    NewVersionLength = NewVers
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
         false ->
             case versions_eq(FromVer, Ver) of
                 true ->
-                    {NewData, NewVers} = prependData(FromT, ToT, T),
-                    {[{ToVer,  FromData ++ ToData}] ++ NewData, [Ver]++NewVers};
+                    {NewData, NewVers, NewIsOverflow} = prependData(FromT, ToT, T, IsOverflow),
+                    CombinedData = FromData ++ ToData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    {[{ToVer,  CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
                 false ->
-                    {NewData, NewVers} = prependData(From, ToT, T),
-                    {[{ToVer, FromData ++ ToData}] ++ NewData, [Ver]++NewVers}
+                    {NewData, NewVers, NewIsOverflow} = prependData(From, ToT, T, IsOverflow),
+                    CombinedData = FromData ++ ToData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)}
             end
     end.
 
-isItUnderflow([]) ->
-    true;
-isItUnderflow([{_, Data} | T]) ->
-    case length(Data) >= (?Order div 2) of
-        true ->
-            false;
-        false ->
-            isItUnderflow(T)
-    end.
-
-isItOverflow([]) ->
-    false;
-isItOverflow([{_, Data} | T]) ->
-    case length(Data) > ?Order of
-        true ->
-            {NewKey, _} = lists:nth(?Order div 2, Data),
-            {true, NewKey};
-        false ->
-            isItOverflow(T)
-    end.
+isItUnderflow(VersionLengthIndex) ->
+    version_tree:is_empty(VersionLengthIndex).
 
 findMostLeftLeafKey({nil, b}) ->
     nil;

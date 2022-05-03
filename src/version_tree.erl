@@ -11,7 +11,7 @@
 
 %% API
 
--export([insert/5, lookup/2, to_list/1, from_list/3, remove/2, highest_version/1, versions_lt/2, versions_eq/2, versions_gt/2]).
+-export([insert/5, lookup/2, to_list/1, from_list/3, remove/2, is_empty/1, highest_version/1, versions_lt/2, versions_eq/2, versions_gt/2]).
 -define(Order, 4).
 
 insert(Ver, Data, Tree, DataConst, NilElm) ->
@@ -64,6 +64,13 @@ lookup(Ver, {V, D, L, R, _C}) ->
       end
   end.
 
+is_empty(nil_nil) ->
+  true;
+is_empty(nil) ->
+  true;
+is_empty({_, _, _, _, _}) ->
+  false.
+
 highest_version(nil) ->
   nil;
 highest_version({V, D, _L, nil, _C}) ->
@@ -89,7 +96,11 @@ insert_from_list([{V, D} | T], Tree, DataConst, NilElm) ->
 
 
 remove(Ver, T) ->
-  delete(Ver, make_red(T)).
+  case delete(Ver, make_red(T)) of
+    nil_nil ->
+      nil;
+    Res -> Res
+  end.
 
 
 delete(_Ver, nil) ->
