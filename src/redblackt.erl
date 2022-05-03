@@ -1,7 +1,7 @@
 -module(redblackt).
 
 -export([insert/5, insertToListB/3, lookup/4, findLeaf/2, getGreaterThan/2, getLessThan/3, getRange/5, findMostLeftLeafKey/1,
-    findSplitPoint/2, splitData/3, get_greatest_lower_index/2, get_greatest_lower_version/2, merge/4, appendData/4, removeFromLeaf/6, removeFromTree/5, remove/5]).
+    findSplitPoint/2, splitData/3, merge/4, appendData/4, removeFromLeaf/6, removeFromTree/5, remove/5]).
 -define(Order, 4).
 
 insert(Key, Val, Ver, Tree, EtsTable) ->
@@ -301,14 +301,12 @@ splitLeafInRemove({DeadL, _DeadR, DeadKey},{T, _OriginalLeftKey, OriginalRightKe
 lookup(_Key, _Ver, {nil, b}, _EtsTable) ->
     {};
 lookup(Key, Ver, {KeyLf, b, leaf}, EtsTable) ->
-    [{_,{T, _LL, _RL, Vers}}] = ets:lookup(EtsTable, KeyLf),
-    VerIndex= get_greatest_lower_version(Ver, Vers),
-    case VerIndex == 0 of
-        true ->
+    [{_,{Data, _LL, _RL, _Vers}}] = ets:lookup(EtsTable, KeyLf),
+    case version_tree:get_glv_data(Ver, Data) of
+        nil ->
             {};
-        false ->
-            {_, Data} = lists:nth(VerIndex, T),
-            binarySearch(Key, Data)
+        {_, Res} ->
+            binarySearch(Key, Res)
     end;
 lookup(Key, Ver, {L, _R, Key2, _C}, EtsTable) when Key < Key2 ->
     lookup(Key, Ver, L, EtsTable);
@@ -327,35 +325,30 @@ getRange(Min, Max, Tree, EtsTable, MaxVersion) when Min == Max ->
 getRange(Min, Max, Tree, EtsTable, MaxVersion) ->
     {MinKey, b, leaf} = findLeaf(Min, Tree),
     {MaxKey, b, leaf} = findLeaf(Max, Tree),
-    [{_,{MiT, _, MinR, MiVers}}] = ets:lookup(EtsTable, MinKey),
-    [{_,{MaT, _, _, MaVers}}] = ets:lookup(EtsTable, MaxKey),
-    MinVerIndex= get_greatest_lower_version(MaxVersion, MiVers),
+    [{_,{MiT, _, MinR, _MiVers}}] = ets:lookup(EtsTable, MinKey),
+    [{_,{MaT, _, _, _MaVers}}] = ets:lookup(EtsTable, MaxKey),
     case MinKey == MaxKey of
         true ->
-            case MinVerIndex == 0 of
-                true ->
+            case version_tree:get_glv_data(MaxVersion, MiT) of
+                nil ->
                     GreaterThan = [];
-                false ->
-                    {_, MiData} = lists:nth(MinVerIndex, MiT),
+                {_, MiData} ->
                     GreaterThan = getGreaterThan(Min, MiData)
             end,
             GreaterThan;
         false ->
-            case MinVerIndex == 0 of
-                true ->
+            case version_tree:get_glv_data(MaxVersion, MiT) of
+                nil ->
                     GreaterThan = [];
-                false ->
-                    {_, MiData} = lists:nth(MinVerIndex, MiT),
+                {_, MiData} ->
                     GreaterThan = getGreaterThan(Min, MiData)
             end,
 
-            MaxVerIndex= get_greatest_lower_version(MaxVersion, MaVers),
-            case MaxVerIndex == 0 of
-                true ->
+            case version_tree:get_glv_data(MaxVersion, MaT) of
+                nil ->
                     LessThan = [];
-                false ->
-                    {_, MaData} = lists:nth(MaxVerIndex, MaT),
-                    LessThan = getLessThan(Min, Max, MaData)
+                {_, MaData} ->
+                    LessThan = getGreaterThan(Min, MaData)
             end,
             GreaterThan ++ getNextUntil(MaxKey, MinR, EtsTable, MaxVersion) ++ LessThan
     end.
@@ -366,12 +359,10 @@ getNextUntil(Until, Key, _EtsTable, _MaxVersion) when Key > Until ->
     [];
 getNextUntil(Until, Key, EtsTable, MaxVersion) when Key < Until ->
     [{_,{T, _, NextKey, Vers}}] = ets:lookup(EtsTable, Key),
-    VerIndex= get_greatest_lower_version(MaxVersion, Vers),
-    case VerIndex == 0 of
-        true ->
-            getNextUntil(Until, NextKey, EtsTable, MaxVersion);
-        false ->
-            {_, Data} = lists:nth(VerIndex, T),
+    case version_tree:get_glv_data(MaxVersion, T) of
+        nil ->
+            [];
+        {_, Data} ->
             lists:append(Data, getNextUntil(Until, NextKey, EtsTable, MaxVersion))
     end.
 
@@ -826,43 +817,6 @@ getLessThan(Min, Key, L) ->
         _ -> getLessThan(Min, Key, Right)
     end.
 
-
-get_greatest_lower_version(_Key, []) ->
-    0;
-get_greatest_lower_version(Key, [Nth]) ->
-    get_greatest_lower_index(Key, [Nth]);
-get_greatest_lower_version(Key, L) ->
-    case versions_gt(lists:last(L), Key) of
-        true ->
-            0;
-        false ->
-            get_greatest_lower_index(Key, L)
-    end.
-
-get_greatest_lower_index(_Key, []) ->
-    0;
-get_greatest_lower_index(Key, [Nth]) ->
-    case versions_lt(Nth, Key) or versions_eq(Nth, Key) of
-        true ->
-            1;
-        false ->
-            0
-    end;
-get_greatest_lower_index(Key, L) ->
-    N = length(L) div 2,
-    {Left, Right} = lists:split(N, L),
-    Nth = lists:nth(N, L),
-    case Nth < Key of
-        true ->
-            get_greatest_lower_index(Key, Left);
-        false ->
-            case Nth > Key of
-                false ->
-                    N;
-                true ->
-                    N + get_greatest_lower_index(Key, Right)
-            end
-    end.
 
 findSplitPoint(_Key, []) ->
     0;
