@@ -8,27 +8,45 @@ insert(Key, Val, Ver, Tree, EtsTable) ->
     makeRootBlack(insertTo(Key, Val, Ver, Tree, EtsTable)).
 
 insertTo(Key, Val, Ver, {nil, b}, EtsTable) ->
-    B = {[{Ver, [{Key, [Val]}]}], nil, nil, [Ver]},
+    VersionIndexInsertionFun = fun(OldList, {NewK, NewV}) -> insertToListB(NewK, NewV, OldList) end,
+    NewVersionIndex = version_tree:insert(Ver, {Key, Val}, nil, VersionIndexInsertionFun, []),
+    B = {NewVersionIndex, nil, nil, nil},
     ets:insert(EtsTable, {Key, B}),
     {Key, b, leaf};
 
 insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
     [{_,{Data, Left, Right, Versions}}]  = ets:lookup(EtsTable, KeyO),
-    [LastVer |_] = Versions,
+%%    [LastVer |_] = Versions,
+    {LastVer, LastVerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         true ->
-            [{_, VerData} | T] = Data,
-            case length(VerData) >= ?Order of
+            case length(LastVerData) >= ?Order of
                 true ->
-                    splitLeaf(Key, Val, Ver, {Data, Left, Right, Versions, KeyO, b, leaf}, EtsTable);
+                    splitLeaf(Key, Val, Ver, {{LastVer, LastVerData}, Data, Left, Right, Versions, KeyO, b, leaf}, EtsTable);
                 false ->
-                    NewVerData = insertToListB(Key, Val, VerData),
-                    case NewVerData == VerData of
+                    NewVerData = insertToListB(Key, Val, LastVerData),
+                    case NewVerData == LastVerData of
                         true ->
                             {KeyO, C, leaf};
                         false ->
-                            ets:insert(EtsTable, {KeyO, { [{Ver, NewVerData}] ++ T, Left, Right, Versions}}),
-                            {KeyO, C, leaf}
+                            NewVerDataLength = length(NewVerData),
+                            case NewVerDataLength >= (?Order div 2) of
+                                true ->
+                                    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+                                    NewVersionIndex = version_tree:insert(Ver, NewVerData, Data, VersionIndexInsertionFun, []),
+
+                                    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+                                    NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, Versions, VersionLengthIndexFun, 0),
+
+                                    ets:insert(EtsTable, {KeyO, { NewVersionIndex, Left, Right, NewVersionLengthIndex}}),
+                                    {KeyO, C, leaf};
+                                false ->
+                                    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+                                    NewVersionIndex = version_tree:insert(Ver, NewVerData, Data, VersionIndexInsertionFun, []),
+                                    ets:insert(EtsTable, {KeyO, { NewVersionIndex, Left, Right, Versions}}),
+                                    {KeyO, C, leaf}
+                            end
+
                     end
             end;
         false ->
@@ -36,14 +54,27 @@ insertTo(Key, Val, Ver, {KeyO, C, leaf}, EtsTable) ->
                 true ->
                     {KeyO, C, leaf};
                 false ->
-                    [{_, LastVerData} | _T] = Data,  %% Add new element to payload of last version
-                    NewVerData = insertToListB(Key, Val, LastVerData),
+
+                    VersionIndexInsertionFun = fun(OldList, {NewK, NewV}) -> insertToListB(NewK, NewV, OldList) end,
+                    NewVersionIndex = version_tree:insert(Ver, {Key, Val}, Data, VersionIndexInsertionFun, LastVerData),
+                    {_, NewVerData} = version_tree:highest_version(NewVersionIndex),
+%%                    [{_, LastVerData} | _T] = Data,  %% Add new element to payload of last version
+%%                    NewVerData = insertToListB(Key, Val, LastVerData),
                     case NewVerData == LastVerData of
                         true ->
                             {KeyO, C, leaf};
                         false ->
-                            ets:insert(EtsTable, {KeyO, { [{Ver, NewVerData}]++ Data, Left, Right, [Ver] ++ Versions}}),
-                            {KeyO, C, leaf}
+                            NewVerDataLength = length(NewVerData),
+                            case NewVerDataLength >= (?Order div 2) of
+                                true ->
+                                    VersionLengthIndexFun = fun(OldLength, NewVerDataLength) -> OldLength + NewVerDataLength end,
+                                    NewVersionLengthIndex = version_tree:insert(Ver, NewVerDataLength, Versions, VersionLengthIndexFun, 0),
+                                    ets:insert(EtsTable, {KeyO, { NewVersionIndex, Left, Right, NewVersionLengthIndex}}),
+                                    {KeyO, C, leaf};
+                                false ->
+                                    ets:insert(EtsTable, {KeyO, { NewVersionIndex, Left, Right, Versions}}),
+                                    {KeyO, C, leaf}
+                            end
                     end
 
             end
@@ -68,11 +99,14 @@ balance({L, {{L3 , R3, Key3, r}, R2, Key2, r}, Key, b}) ->
 balance({L, R, Key, C}) ->
     {L, R, Key, C}.
 
-splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO, b, leaf}, EtsTable) ->
-    [{_, VerData} | RestT] = T,
-    NewVerT = insertToListB(Key, Val, VerData),
+splitLeaf(Key, Val, Ver, {{_LastVer, LastVerData}, T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO, b, leaf}, EtsTable) ->
+    NewVerT = insertToListB(Key, Val, LastVerData),
+
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
+    NewVersionIndex = version_tree:insert(Ver, NewVerT, T, VersionIndexInsertionFun, []),
+
     {NewKey, _} = lists:nth(?Order div 2, NewVerT),
-    {LeftVers, LeftData, RightVers, RightData} = splitData({[], [], [], []}, [{Ver, NewVerT}] ++ RestT, NewKey),
+    {LeftVers, LeftData, RightVers, RightData} = splitData({nil, nil, nil, nil}, version_tree:to_list(NewVersionIndex), NewKey),
     {LeftT, RightT} = lists:split(?Order div 2, NewVerT),
     {RightKey, _} = lists:nth(1, RightT),
     {LeftKey, _} = lists:nth(1, LeftT),
@@ -86,14 +120,27 @@ splitLeaf(Key, Val, Ver, {T, OriginalLeftKey, OriginalRightKey, _Versions, KeyO,
     {{LeftKey, b, leaf}, {RightKey, b, leaf}, NewKey, r}.
 
 splitData({LeftVers, LeftData, RightVers, RightData}, [], _SplitKey) ->
-    {lists:reverse(LeftVers), lists:reverse(LeftData), lists:reverse(RightVers), lists:reverse(RightData)};
+    {LeftVers, LeftData, RightVers, RightData};
 splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKey) ->
+    VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
+    VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
     SplitPoint = findSplitPoint(SplitKey, Data),
     case SplitPoint == 0 of
         true ->
             case compareList(Data, RightData) of
                 false ->
-                    splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver, Data}] ++ RightData}, T, SplitKey);
+
+                    NewVerDataLength = length(Data),
+                    case NewVerDataLength >= (?Order div 2) of
+                        true ->
+                            NewRightVersionLengthIndex = version_tree:insert(Ver, length(Data), RightVers, VersionLengthIndexFun, 0);
+                        false ->
+                            NewRightVersionLengthIndex = RightVers
+                    end,
+
+                    NewRightVersionIndex = version_tree:insert(Ver, Data, RightData, VersionIndexInsertionFun, []),
+
+                    splitData({LeftVers, LeftData, NewRightVersionLengthIndex, NewRightVersionIndex}, T, SplitKey);
                 true ->
                     splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
             end;
@@ -104,30 +151,66 @@ splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKe
                 {Left, []} ->
                     case compareList(Left, LeftData) of
                         false ->
-                            splitData({[Ver] ++ LeftVers, [{Ver, Left}] ++ LeftData, RightVers, RightData}, T, SplitKey);
+
+                            NewVerDataLength = length(Left),
+                            case NewVerDataLength >= (?Order div 2) of
+                                true ->
+                                    NewLeftVersionLengthIndex = version_tree:insert(Ver, length(Left), LeftVers, VersionLengthIndexFun, 0);
+                                false ->
+                                    NewLeftVersionLengthIndex = LeftVers
+                            end,
+                            NewLeftVersionIndex = version_tree:insert(Ver, Left, LeftData, VersionIndexInsertionFun, []),
+
+
+                            splitData({NewLeftVersionLengthIndex, NewLeftVersionIndex, RightVers, RightData}, T, SplitKey);
                         true ->
                             splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
                     end;
                 {[], Right} ->
                     case compareList(Right, RightData) of
                         false ->
-                            splitData({LeftVers, LeftData, [Ver] ++ RightVers, [{Ver,Right}] ++ RightData}, T, SplitKey);
+
+                            NewVerDataLength = length(Right),
+                            case NewVerDataLength >= (?Order div 2) of
+                                true ->
+                                    NewRightVersionLengthIndex = version_tree:insert(Ver, length(Right), RightVers, VersionLengthIndexFun, 0);
+                                false ->
+                                    NewRightVersionLengthIndex = RightVers
+                            end,
+                            NewRightVersionIndex = version_tree:insert(Ver, Right, RightData, VersionIndexInsertionFun, []),
+
+
+                            splitData({LeftVers, LeftData, NewRightVersionLengthIndex, NewRightVersionIndex}, T, SplitKey);
                         true ->
                             splitData({LeftVers, LeftData, RightVers, RightData}, T, SplitKey)
                     end;
                 {Left, Right} ->
                     case compareList(Left, LeftData) of
                         false ->
-                            NewLeftVers = [Ver] ++ LeftVers,
-                            NewLeftData = [{Ver, Left}] ++ LeftData;
+                            NewLeftVerDataLength = length(Left),
+                            case NewLeftVerDataLength >= (?Order div 2) of
+                                true ->
+                                    NewLeftVers = version_tree:insert(Ver, NewLeftVerDataLength, LeftVers, VersionLengthIndexFun, 0);
+                                false ->
+                                    NewLeftVers = LeftVers
+                            end,
+                            NewLeftData = version_tree:insert(Ver, Left, LeftData, VersionIndexInsertionFun, []);
+
                         true ->
                             NewLeftVers = LeftVers,
                             NewLeftData = LeftData
                     end,
                     case compareList(Right, RightData) of
                         false ->
-                            NewRightVers = [Ver] ++ RightVers,
-                            NewRightData = [{Ver,Right}] ++ RightData;
+                            NewRightVerDataLength = length(Right),
+                            case NewRightVerDataLength >= (?Order div 2) of
+                                true ->
+                                    NewRightVers = version_tree:insert(Ver, NewRightVerDataLength, RightVers, VersionLengthIndexFun, 0);
+                                false ->
+                                    NewRightVers = RightVers
+                            end,
+                            NewRightData = version_tree:insert(Ver, Right, RightData, VersionIndexInsertionFun, []);
+
                         true ->
                             NewRightVers = RightVers,
                             NewRightData = RightData
@@ -136,10 +219,13 @@ splitData({LeftVers, LeftData, RightVers, RightData}, [{Ver, Data} | T], SplitKe
                     splitData({NewLeftVers, NewLeftData, NewRightVers, NewRightData}, T, SplitKey)
             end
     end.
-compareList(_List, []) ->
-    false;
-compareList(List, [{_Ver2, Data2} | _T]) ->
-    List =:= Data2.
+
+compareList(List, Index) ->
+    case version_tree:highest_version(Index) of
+        nil ->
+            false;
+        {_, Data} -> List =:= Data
+    end.
 
 updateOriginalLeftLeaf(_EtsTable, _NewRightKey, nil) ->
     ok;

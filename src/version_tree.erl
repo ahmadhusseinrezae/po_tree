@@ -11,7 +11,7 @@
 
 %% API
 
--export([insert/5, lookup/2, to_list/1, from_list/3, remove/2, versions_lt/2, versions_eq/2, versions_gt/2]).
+-export([insert/5, lookup/2, to_list/1, from_list/3, remove/2, highest_version/1, versions_lt/2, versions_eq/2, versions_gt/2]).
 -define(Order, 4).
 
 insert(Ver, Data, Tree, DataConst, NilElm) ->
@@ -63,6 +63,13 @@ lookup(Ver, {V, D, L, R, _C}) ->
           lookup(Ver, R)
       end
   end.
+
+highest_version(nil) ->
+  nil;
+highest_version({V, D, _L, nil, _C}) ->
+  {V, D};
+highest_version({_V, _D, _L, R, _C}) ->
+  highest_version(R).
 
 
 to_list(nil) ->
