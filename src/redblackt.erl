@@ -340,15 +340,15 @@ getRange(Min, Max, Tree, EtsTable, MaxVersion) ->
             case version_tree:get_glv_data(MaxVersion, MiT) of
                 nil ->
                     GreaterThan = [];
-                {_, MiData} ->
+                {_Vmin, MiData} ->
                     GreaterThan = getGreaterThan(Min, MiData)
             end,
 
             case version_tree:get_glv_data(MaxVersion, MaT) of
                 nil ->
                     LessThan = [];
-                {_, MaData} ->
-                    LessThan = getGreaterThan(Min, MaData)
+                {_Vmax, MaData} ->
+                    LessThan = getLessThan(Min, Max, MaData)
             end,
             GreaterThan ++ getNextUntil(MaxKey, MinR, EtsTable, MaxVersion) ++ LessThan
     end.
@@ -358,7 +358,7 @@ getNextUntil(Until, Key, _EtsTable, _MaxVersion) when Key == Until ->
 getNextUntil(Until, Key, _EtsTable, _MaxVersion) when Key > Until ->
     [];
 getNextUntil(Until, Key, EtsTable, MaxVersion) when Key < Until ->
-    [{_,{T, _, NextKey, Vers}}] = ets:lookup(EtsTable, Key),
+    [{_,{T, _, NextKey, _Vers}}] = ets:lookup(EtsTable, Key),
     case version_tree:get_glv_data(MaxVersion, T) of
         nil ->
             [];
@@ -437,7 +437,6 @@ removeFromLeaf(Key, Val, Ver, {LeafKey, b, leaf} = Tree, Table , self) ->
             end;
         true ->
             NewData = binaryFindDelete(Key, Val, VerData),
-
             NewVerDataLength = length(NewData),
             case length(VerData) >= (?Order div 2) of
                 true ->
@@ -462,7 +461,6 @@ removeFromLeaf(Key, Val, Ver, {{LeafKey, b, leaf}, R, _ParentKey, _C} = Tree, Ta
     VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
 
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
-%%    [{LastVer, VerData} | T] = Data,
     {LastVer, VerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         false ->
@@ -539,13 +537,13 @@ removeFromLeaf(Key, Val, Ver, {L, {LeafKey, b, leaf}, _ParentKey, _C} = Tree, Ta
     VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,  % since we have the new version data, we simply replace the data
 
     [{_,{Data, LeafL, LeafR, V}}] = ets:lookup(Table, LeafKey),
-%%    [{LastVer, VerData} | T] = Data,
     {LastVer, VerData} = version_tree:highest_version(Data),
     case versions_eq(LastVer, Ver) of
         false ->
             case versions_gt(Ver, LastVer) of
                 true ->
                     NewData = binaryFindDelete(Key, Val, VerData),
+
                     case NewData == VerData of
                         true ->
                             Tree;
@@ -616,11 +614,11 @@ merge(Table, Key, {DeadData, DeadL, DeadR, _DeadVers}, {ToLeafKey, b, leaf}) whe
     [{_,{ToData, L, R, ToVers}}] = ets:lookup(Table, ToLeafKey),
     VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
     VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,
-    {NewToD, NewToV, IsOverflow} = appendData(version_tree:to_list(DeadData), version_tree:to_list(ToData), version_tree:to_list(ToVers), false),
+    {NewToD, NewToV, IsOverflow, NewParentKey} = appendData(lists:reverse(version_tree:to_list(DeadData)), lists:reverse(version_tree:to_list(ToData)), lists:reverse(version_tree:to_list(ToVers)), false),
     NewToData = version_tree:from_list(NewToD, VersionIndexInsertionFun, []),
     NewToVers = version_tree:from_list(NewToV, VersionLengthIndexFun, 0),
     case IsOverflow of
-        {true, NewParentKey} ->
+        true ->
             splitLeafInRemove({ DeadL, DeadR, Key},{NewToData, L, R, NewToVers, ToLeafKey}, NewParentKey, Table, to_right);
         false ->
             ets:delete(Table, Key),
@@ -638,11 +636,11 @@ merge(Table, Key, {DeadData, DeadL, DeadR, _DeadVers}, {ToLeafKey, b, leaf}) whe
     [{_,{ToData, L, R, ToVers}}] = ets:lookup(Table, ToLeafKey),
     VersionLengthIndexFun = fun(_OldLength, NewVerDataLength) -> NewVerDataLength end,
     VersionIndexInsertionFun = fun(_OldList, NewList) -> NewList end,
-    {NewToD, NewToV, IsOverflow} = prependData(version_tree:to_list(DeadData), version_tree:to_list(ToData), version_tree:to_list(ToVers), false),
+    {NewToD, NewToV, IsOverflow, NewParentKey} = prependData(lists:reverse(version_tree:to_list(DeadData)), lists:reverse(version_tree:to_list(ToData)), lists:reverse( version_tree:to_list(ToVers)), false),
     NewToData = version_tree:from_list(NewToD, VersionIndexInsertionFun, []),
     NewToVers = version_tree:from_list(NewToV, VersionLengthIndexFun, 0),
     case IsOverflow of
-        {true, NewParentKey} ->
+        true ->
             splitLeafInRemove({ DeadL, DeadR, Key},{NewToData, L, R, NewToVers, ToLeafKey}, NewParentKey, Table, to_left);
         false ->
             ets:delete(Table, Key),
@@ -663,9 +661,9 @@ merge(Table, Key, DeadLeaf, {L, R, Key2, C}) when Key > Key2 ->
 
 
 appendData([], ToData, ToVers, IsOverflow) ->
-    {ToData, ToVers, IsOverflow};
+    {ToData, ToVers, IsOverflow, 0};
 appendData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
-    {NewData, NewVers, NewIsOverflow} = appendData(FromT, [], [], IsOverflow),
+    {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(FromT, [], [], IsOverflow),
     NewVerLength = length(FromData),
     case NewVerLength >= (?Order div 2) of
         true ->
@@ -673,11 +671,18 @@ appendData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
         false ->
             NewVersionLength = NewVers
     end,
-    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
-appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [{Ver, _} | T] = ToVers, IsOverflow) ->
-    case versions_gt(FromVer, Ver) of
+    case NewVerLength > ?Order of
         true ->
-            {NewData, NewVers, NewIsOverflow} = appendData(FromT, To, ToVers, IsOverflow),
+            {NewKey, _} = lists:nth(?Order div 2, FromData),
+            NewSplitKey = NewKey;
+        false ->
+            NewSplitKey = SplitKey
+    end,
+    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [], IsOverflow) ->
+    case versions_gt(FromVer, ToVer) of
+        true ->
+            {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(FromT, To, [], IsOverflow),
             CombinedData = ToData ++ FromData,
             NewVerLength = length(CombinedData),
             case NewVerLength >= (?Order div 2) of
@@ -686,22 +691,18 @@ appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [
                 false ->
                     NewVersionLength = NewVers
             end,
-            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
-        false ->
-            case versions_eq(FromVer, Ver) of
+            case NewVerLength > ?Order of
                 true ->
-                    {NewData, NewVers, NewIsOverflow} = appendData(FromT, ToT, T, IsOverflow),
-                    CombinedData = ToData ++ FromData,
-                    NewVerLength = length(CombinedData),
-                    case NewVerLength >= (?Order div 2) of
-                        true ->
-                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
-                        false ->
-                            NewVersionLength = NewVers
-                    end,
-                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
+                    {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                    NewSplitKey = NewKey;
                 false ->
-                    {NewData, NewVers, NewIsOverflow} = appendData(From, ToT, T, IsOverflow),
+                    NewSplitKey = SplitKey
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+        false ->
+            case versions_eq(FromVer, ToVer) of
+                true ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(FromT, ToT, [], IsOverflow),
                     CombinedData = ToData ++ FromData,
                     NewVerLength = length(CombinedData),
                     case NewVerLength >= (?Order div 2) of
@@ -710,14 +711,99 @@ appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [
                         false ->
                             NewVersionLength = NewVers
                     end,
-                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)}
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+                false ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(From, ToT, [], IsOverflow),
+                    CombinedData = ToData ++ FromData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow),NewSplitKey}
+            end
+    end;
+appendData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [_Ver | T] = ToVers, IsOverflow) ->
+    case versions_gt(FromVer, ToVer) of
+        true ->
+            {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(FromT, To, ToVers, IsOverflow),
+            CombinedData = ToData ++ FromData,
+            NewVerLength = length(CombinedData),
+            case NewVerLength >= (?Order div 2) of
+                true ->
+                    NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+                false ->
+                    NewVersionLength = NewVers
+            end,
+            case NewVerLength > ?Order of
+                true ->
+                    {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                    NewSplitKey = NewKey;
+                false ->
+                    NewSplitKey = SplitKey
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+        false ->
+            case versions_eq(FromVer, ToVer) of
+                true ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(FromT, ToT, T, IsOverflow),
+                    CombinedData = ToData ++ FromData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+                false ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = appendData(From, ToT, T, IsOverflow),
+                    CombinedData = ToData ++ FromData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow),NewSplitKey}
             end
     end.
 
 prependData([], ToData, ToVers, IsOverflow) ->
-    {ToData, ToVers, IsOverflow};
+    {ToData, ToVers, IsOverflow, 0};
 prependData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
-    {NewData, NewVers, NewIsOverflow} = prependData(FromT, [], [], IsOverflow),
+    {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(FromT, [], [], IsOverflow),
     NewVerLength = length(FromData),
     case NewVerLength >= (?Order div 2) of
         true ->
@@ -725,11 +811,18 @@ prependData([{FromVer, FromData} | FromT], [], [], IsOverflow) ->
         false ->
             NewVersionLength = NewVers
     end,
-    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
-prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [{Ver, _} | T] = ToVers, IsOverflow) ->
-    case versions_gt(FromVer, Ver) of
+    case NewVerLength > ?Order of
         true ->
-            {NewData, NewVers, NewIsOverflow} = prependData(FromT, To, ToVers, IsOverflow),
+            {NewKey, _} = lists:nth(?Order div 2, FromData),
+            NewSplitKey = NewKey;
+        false ->
+            NewSplitKey = SplitKey
+    end,
+    {[{FromVer, FromData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [], IsOverflow) ->
+    case versions_gt(FromVer, ToVer) of
+        true ->
+            {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(FromT, To, [], IsOverflow),
             CombinedData = FromData ++ ToData,
             NewVerLength = length(CombinedData),
             case NewVerLength >= (?Order div 2) of
@@ -738,22 +831,18 @@ prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, 
                 false ->
                     NewVersionLength = NewVers
             end,
-            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
-        false ->
-            case versions_eq(FromVer, Ver) of
+            case NewVerLength > ?Order of
                 true ->
-                    {NewData, NewVers, NewIsOverflow} = prependData(FromT, ToT, T, IsOverflow),
-                    CombinedData = FromData ++ ToData,
-                    NewVerLength = length(CombinedData),
-                    case NewVerLength >= (?Order div 2) of
-                        true ->
-                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
-                        false ->
-                            NewVersionLength = NewVers
-                    end,
-                    {[{ToVer,  CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)};
+                    {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                    NewSplitKey = NewKey;
                 false ->
-                    {NewData, NewVers, NewIsOverflow} = prependData(From, ToT, T, IsOverflow),
+                    NewSplitKey = SplitKey
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+        false ->
+            case versions_eq(FromVer, ToVer) of
+                true ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(FromT, ToT, [], IsOverflow),
                     CombinedData = FromData ++ ToData,
                     NewVerLength = length(CombinedData),
                     case NewVerLength >= (?Order div 2) of
@@ -762,7 +851,92 @@ prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, 
                         false ->
                             NewVersionLength = NewVers
                     end,
-                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow)}
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer,  CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+                false ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(From, ToT, [], IsOverflow),
+                    CombinedData = FromData ++ ToData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey}
+            end
+    end;
+prependData([{FromVer, FromData} | FromT] = From, [{ToVer, ToData} | ToT] = To, [{Ver, _} | T] = ToVers, IsOverflow) ->
+    case versions_gt(FromVer, ToVer) of
+        true ->
+            {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(FromT, To, ToVers, IsOverflow),
+            CombinedData = FromData ++ ToData,
+            NewVerLength = length(CombinedData),
+            case NewVerLength >= (?Order div 2) of
+                true ->
+                    NewVersionLength = [{FromVer, NewVerLength}] ++ NewVers;
+                false ->
+                    NewVersionLength = NewVers
+            end,
+            case NewVerLength > ?Order of
+                true ->
+                    {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                    NewSplitKey = NewKey;
+                false ->
+                    NewSplitKey = SplitKey
+            end,
+            {[{FromVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+        false ->
+            case versions_eq(FromVer, ToVer) of
+                true ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(FromT, ToT, T, IsOverflow),
+                    CombinedData = FromData ++ ToData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer,  CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey};
+                false ->
+                    {NewData, NewVers, NewIsOverflow, SplitKey} = prependData(From, ToT, T, IsOverflow),
+                    CombinedData = FromData ++ ToData,
+                    NewVerLength = length(CombinedData),
+                    case NewVerLength >= (?Order div 2) of
+                        true ->
+                            NewVersionLength = [{ToVer, NewVerLength}] ++ NewVers;
+                        false ->
+                            NewVersionLength = NewVers
+                    end,
+                    case NewVerLength > ?Order of
+                        true ->
+                            {NewKey, _} = lists:nth(?Order div 2, CombinedData),
+                            NewSplitKey = NewKey;
+                        false ->
+                            NewSplitKey = SplitKey
+                    end,
+                    {[{ToVer, CombinedData}] ++ NewData, NewVersionLength, ((NewVerLength > ?Order) or NewIsOverflow), NewSplitKey}
             end
     end.
 
@@ -938,3 +1112,18 @@ versions_gt(Ver1, Ver2) ->
     Ver1 > Ver2.
 versions_lt(Ver1, Ver2) ->
     Ver1 < Ver2.
+
+
+
+%%{[{2,[{1,[1]},{3,[2]},{4,[3]},{5,[4]}]}, {1,[{1,[1]}]}, {2,[{2,[2]}]}], [{2,4}], false}
+
+%%00 the prepend result {{1,[{1,[1]}],nil,{2,[{2,[2]}],nil,nil,r},b},
+%%{2,[{3,[2]},{4,[3]},{5,[4]}],nil,nil,b},
+%%{2,3,nil,nil,b}}
+%%
+%%the prepend result {[{2,[{1,[1]},{3,[2]},{4,[3]},{5,[4]}]},
+%%{1,[{1,[1]}]},
+%%{2,[{2,[2]}]}],
+%%[{2,4}],
+%%false}
+

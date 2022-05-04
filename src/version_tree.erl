@@ -75,7 +75,12 @@ get_glv_data(Ver, {V, D, L, R, _C}) ->
         true ->
           get_glv_data(Ver, L);
         false ->
-          {V, D}
+          case R of
+            nil ->
+              {V, D};
+            _ ->
+              get_glv_data(Ver, R)
+          end
       end
   end.
 
