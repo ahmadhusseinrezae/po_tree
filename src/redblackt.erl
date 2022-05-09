@@ -19,9 +19,6 @@ getHighestItem(Tree) ->
 replaceItemData(_OldData, NewData) ->
     NewData.
 
-sumUpItemData(OldData, NewData) ->
-    OldData + NewData.
-
 insertToItemData(OldList, {NewK, NewV}) ->
     insertToListB(NewK, NewV, OldList).
 
@@ -243,28 +240,26 @@ getRange(Min, Max, Tree, EtsTable, MaxVersion) ->
     [{_,{MaT, _, _, _MaVers}}] = getPayload(EtsTable, MaxKey),
     case MinKey == MaxKey of
         true ->
-            case version_tree:get_glv_data(MaxVersion, MiT) of
-                nil ->
-                    GreaterThan = [];
-                {_, MiData} ->
-                    GreaterThan = getGreaterThan(Min, MiData)
-            end,
-            GreaterThan;
+            getGreaterThanFromVersion(MaxVersion, Min, MiT);
         false ->
-            case version_tree:get_glv_data(MaxVersion, MiT) of
-                nil ->
-                    GreaterThan = [];
-                {_Vmin, MiData} ->
-                    GreaterThan = getGreaterThan(Min, MiData)
-            end,
-
-            case version_tree:get_glv_data(MaxVersion, MaT) of
-                nil ->
-                    LessThan = [];
-                {_Vmax, MaData} ->
-                    LessThan = getLessThan(Min, Max, MaData)
-            end,
+            GreaterThan = getGreaterThanFromVersion(MaxVersion, Min, MiT),
+            LessThan = getLessThanFromVersion(MaxVersion, Min, Max, MaT),
             GreaterThan ++ getNextUntil(MaxKey, MinR, EtsTable, MaxVersion) ++ LessThan
+    end.
+getGreaterThanFromVersion(Version, Key, VersionIndex) ->
+    case version_tree:get_glv_data(Version, VersionIndex) of
+        nil ->
+            [];
+        {_, GLVVersionData} ->
+            getGreaterThan(Key, GLVVersionData)
+    end.
+
+getLessThanFromVersion(Version, MinimumKey, MaximumKey, VersionIndex) ->
+    case version_tree:get_glv_data(Version, VersionIndex) of
+        nil ->
+            [];
+        {_, GLVVersionData} ->
+            getLessThan(MinimumKey, MaximumKey, GLVVersionData)
     end.
 
 getNextUntil(Until, Key, _EtsTable, _MaxVersion) when Key == Until ->

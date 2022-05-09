@@ -41,7 +41,6 @@ balance({V, D, L, {V2, D2, L2, {V3, D3, L3 , R3, r}, r}, b}) ->
   {V2, D2, {V, D, L , L2, b}, {V3, D3, L3, R3, b}, r};
 balance({V, D, L, {V2, D2, {V3, D3, L3 , R3, r}, R2, r}, b}) ->
   {V3, D3, {V, D, L , L3, b}, {V2, D2, R3, R2, b}, r};
-
 balance({V, D, L, {V2, D2, {V3, D3, L3 , R3, r}, R2, r}, bb}) ->
   {V3, D3, {V, D, L , L3, b}, {V2, D2, R3, R2, b}, b};
 balance({V, D, {V2, D2, L2, {V3, D3, L3 , R3, r}, r}, R, bb}) ->
