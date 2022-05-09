@@ -11,7 +11,7 @@
 
 %% API
 
--export([insert/5, lookup/2, get_glv_data/2, to_list/1, from_list/3, remove/2, is_empty/1, highest_version/1, versions_lt/2, versions_eq/2, versions_gt/2]).
+-export([insert/5, lookup/2, get_glv_data/2, to_list/1, from_list/3, remove/2, is_empty/1, highest_version/1, lowest_version/1, versions_lt/2, versions_eq/2, versions_gt/2]).
 -define(Order, 4).
 
 insert(Ver, Data, Tree, DataConst, NilElm) ->
@@ -97,6 +97,13 @@ highest_version({V, D, _L, nil, _C}) ->
   {V, D};
 highest_version({_V, _D, _L, R, _C}) ->
   highest_version(R).
+
+lowest_version(nil) ->
+  nil;
+lowest_version({V, D, nil, _R, _C}) ->
+  {V, D};
+lowest_version({_V, _D, L, _R, _C}) ->
+  lowest_version(L).
 
 
 to_list(nil) ->
