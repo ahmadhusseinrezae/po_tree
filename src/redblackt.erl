@@ -272,7 +272,7 @@ getNextUntil(Until, Key, EtsTable, MaxVersion) when Key < Until ->
         nil ->
             [];
         {_, Data} ->
-            lists:append(Data, getNextUntil(Until, NextKey, EtsTable, MaxVersion))
+            Data ++ getNextUntil(Until, NextKey, EtsTable, MaxVersion)
     end.
 
 findLeaf(_Key, {nil, b}) ->
@@ -529,15 +529,12 @@ getGreaterThan(Key, [{Key2, Val2}]) when Key2 == Key ->
     [{Key2, Val2}];
 getGreaterThan(Key, [{Key2, _Val2}]) when Key > Key2 ->
     [];
-getGreaterThan(Key, L) ->
-    N = length(L) div 2,
-    {Left, Right} = lists:split(N, L),
-    {Nth,_} = lists:nth(N, L),
-    case Nth >= Key of
+getGreaterThan(Key, [{Key2, _Val2} | T] = List) ->
+    case Key =< Key2 of
         true ->
-            getGreaterThan(Key, Left) ++ Right;
+            List;
         false ->
-            getGreaterThan(Key, Right)
+            getGreaterThan(Key, T)
     end.
 
 getLessThan(_Min, _Key, []) ->
@@ -550,16 +547,12 @@ getLessThan(Min, Key, [{Key2, Val2}]) when (Key > Key2) and (Key2 >= Min) ->
     [{Key2, Val2}];
 getLessThan(Min, Key, [{Key2, _Val2}]) when (Key > Key2) and (Key2 < Min) ->
     [];
-getLessThan(Min, Key, L) ->
-    N = length(L) div 2,
-    {Left, Right} = lists:split(N, L),
-    {Nth,_} = lists:nth(N, L),
-    case {Nth >= Key, Nth >= Min} of
-        {true, true} ->
-            getLessThan(Min, Key, Left);
-        {false, true} ->
-            Left ++ getLessThan(Min, Key, Right);
-        _ -> getLessThan(Min, Key, Right)
+getLessThan(Min, Key, [{Key2, _Val2} | T]) ->
+    case (Key >= Key2) and (Key2 >= Min) of
+        true ->
+            [{Key2, _Val2}] ++ getLessThan(Min, Key, T);
+        false ->
+            []
     end.
 
 
