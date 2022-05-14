@@ -1,5 +1,5 @@
 -module(range_tree).
--include("include/range_tree.hrl").
+-include("potree.hrl").
 -behaviour(gen_server).
 
 -import(lists,[max/1]).
@@ -55,7 +55,7 @@ handle_call(clean_store, _From, #state{index = _Index, table = Table, dic_table 
 handle_call({insert_record, {RowId, Val, Ver}}, _From, #state{index = Index, table = Table, dic_table = DicTable} = State) ->
   try delete_item(RowId, Val, Ver, Index, Table, DicTable) of
     CleanIndex ->
-      try redblackt:insert(Val, RowId, Ver, CleanIndex, Table) of
+      try po_tree:insert(Val, RowId, Ver, CleanIndex, Table) of
         NewIndex ->
           {reply, ok, State#state{index = NewIndex, table = Table}}
       catch
@@ -70,7 +70,7 @@ handle_call({insert_record, {RowId, Val, Ver}}, _From, #state{index = Index, tab
   end;
 
 handle_call({remove, RowId, Val, Ver}, _From, #state{index = Index, table = Table, dic_table = DicTable} = State) ->
-  try redblackt:remove(Val, RowId, Ver, Index, Table) of
+  try po_tree:remove(Val, RowId, Ver, Index, Table) of
     NewIndex ->
       delete_record(RowId, Val, DicTable),
       {reply, ok, State#state{index = NewIndex, table = Table}}
@@ -84,7 +84,7 @@ handle_call(tree, _From, #state{index = Index} = State) ->
   {reply, Index, State};
 
 handle_call({get_range, Min, Max, _, _, Version}, _From, #state{index = Index, table = Table} = State) ->
-  try redblackt:getRange(Min, Max, Index, Table, Version) of
+  try po_tree:getRange(Min, Max, Index, Table, Version) of
     Res ->
       {reply, Res, State}
   catch
@@ -113,7 +113,7 @@ delete_item(RowId, NewVal, Ver, Index, Table, DicTable) ->
           Index;
         false ->
 %%          io:format("the val for delete is ~p and key is ~p ~n ", [Val, RowId]),
-          try redblackt:remove(Val, RowId, Ver, Index, Table) of
+          try po_tree:remove(Val, RowId, Ver, Index, Table) of
             NewIndex ->
 %%              io:format("Now index is ~p and Table is ~p ~n ", [NewIndex, Table]),
               ets:insert(DicTable, {RowId, NewVal}),
