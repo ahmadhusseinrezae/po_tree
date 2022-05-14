@@ -1,4 +1,5 @@
--module(range_tree).
+-module(po_tree_server).
+-author("ahr").
 -include("potree.hrl").
 -behaviour(gen_server).
 
@@ -16,8 +17,8 @@ start_link() ->
   gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 init_tree() ->
-  range_tree_sup:start_link(),
-  range_tree_sup:start_sup([]),
+  po_tree_sup:start_link(),
+  po_tree_sup:start_sup([]),
   ok.
 
 stop() ->
@@ -109,13 +110,10 @@ delete_item(RowId, NewVal, Ver, Index, Table, DicTable) ->
     [{RowId, Val} | _] ->
       case Val == NewVal of
         true ->
-%%          io:format("the val is equal to previous value, so would not removed ~n"),
           Index;
         false ->
-%%          io:format("the val for delete is ~p and key is ~p ~n ", [Val, RowId]),
           try po_tree:remove(Val, RowId, Ver, Index, Table) of
             NewIndex ->
-%%              io:format("Now index is ~p and Table is ~p ~n ", [NewIndex, Table]),
               ets:insert(DicTable, {RowId, NewVal}),
               NewIndex
           catch

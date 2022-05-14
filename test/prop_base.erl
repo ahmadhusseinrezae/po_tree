@@ -15,8 +15,8 @@ prop_test() ->
 %%% Helpers %%%
 %%%%%%%%%%%%%%%
 check_range(List) ->
-    range_tree:init_tree(),
-    range_tree:clean_store(),
+    po_tree_server:init_tree(),
+    po_tree_server:clean_store(),
     PreparedList = prepare_list(List),
     construct_index(PreparedList, 1, []).
 
@@ -27,7 +27,7 @@ construct_index([{InsertList, RemoveList} | T], Ver, InsertedList) ->
     NewInsertedList = construct_list(InsertList, RemoveList, InsertedList),
     insert(InsertList, Ver),
     remove(RemoveList, Ver),
-    IndexRes = range_tree:get_range(?MIN,?MAX,true,true,Ver),
+    IndexRes = po_tree_server:get_range(?MIN,?MAX,true,true,Ver),
     case compare_lists2( ordsets:to_list(ordsets:from_list(NewInsertedList)), IndexRes) of
         true ->
             construct_index(T, Ver+1, NewInsertedList);
@@ -38,13 +38,13 @@ construct_index([{InsertList, RemoveList} | T], Ver, InsertedList) ->
 insert([], _Ver) ->
     ok;
 insert([{RowId, Val} | T], Ver) ->
-    range_tree:insert({RowId, Val, Ver}),
+    po_tree_server:insert({RowId, Val, Ver}),
     insert(T, Ver).
 
 remove([], _Ver) ->
     ok;
 remove([{RowId, Val} | T], Ver) ->
-    range_tree:remove(RowId, Val, Ver),
+    po_tree_server:remove(RowId, Val, Ver),
     remove(T, Ver).
 
 

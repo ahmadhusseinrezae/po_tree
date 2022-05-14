@@ -1,4 +1,5 @@
 -module(po_tree).
+-author("ahr").
 -include("potree.hrl").
 
 -export([insert/5, lookup/4, getRange/5, remove/5, findMostLeftLeafKey/1]).
@@ -42,7 +43,7 @@ removePayload(EtsTable, Key) ->
 insertOrReplaceInTree(Item, Data, Tree, NullItem) ->
     version_tree:insert(Item, Data, Tree, fun replaceItemData/2, NullItem).
 
--spec insertOrReplaceInTreeFun(version(), version_data(), version_index(), term(), term()) -> version_index().
+-spec insertOrReplaceInTreeFun(version(), version_data(), version_index(), generic_data_cons_fun(), term()) -> version_index().
 insertOrReplaceInTreeFun(Item, Data, Tree, Fun, NullItem) ->
     version_tree:insert(Item, Data, Tree, Fun, NullItem).
 
@@ -543,7 +544,7 @@ appendData(From, To, ToVers, IsOverflow) ->
 prependData(From, To, ToVers, IsOverflow) ->
     joinData(From, To, ToVers, IsOverflow, fun joinPrepend/2).
 
--spec joinData(version_data_list(), version_data_list(), version_length_list(), boolean(), term()) -> {version_data_list(), version_length_list(), boolean(), pos_integer()}.
+-spec joinData(version_data_list(), version_data_list(), version_length_list(), boolean(), generic_data_cons_fun()) -> {version_data_list(), version_length_list(), boolean(), pos_integer()}.
 joinData([], ToData, ToVers, IsOverflow, _JoinFun) ->
     {ToData, ToVers, IsOverflow, 0};
 joinData([{FromVer, FromData} | FromT], [], [], IsOverflow, JoinFun) ->
