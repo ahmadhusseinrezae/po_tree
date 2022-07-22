@@ -1,6 +1,7 @@
 -module(prop_base).
 -include_lib("proper/include/proper.hrl").
-
+-define(MIN, 1).
+-define(MAX, 1000000).
 %%%%%%%%%%%%%%%%%%
 %%% Properties %%%
 %%%%%%%%%%%%%%%%%%
@@ -14,27 +15,21 @@ prop_test() ->
 %%% Helpers %%%
 %%%%%%%%%%%%%%%
 check_range(List) ->
-    range_tree:init_tree(),
-    range_tree:clean_store(),
-    construct_index(List, 1, []).
+    po_tree_server:init_tree(),
+    po_tree_server:clean_store(),
+    PreparedList = prepare_list(List),
+    construct_index(PreparedList, 1, []).
 
 construct_index([], _Ver, _InsertedList) ->
     true;
 
 construct_index([{InsertList, RemoveList} | T], Ver, InsertedList) ->
+    NewInsertedList = construct_list(InsertList, RemoveList, InsertedList),
     insert(InsertList, Ver),
     remove(RemoveList, Ver),
-    NewInsertedList = construct_list(InsertList, RemoveList, InsertedList),
-    IndexRes = range_tree:get_range(1,1000000,true,true,Ver),
-%%    io:format("~n //|||||// Version is is ~p ~n", [Ver]),
-%%    io:format("~n ///// the inserted list  from previous call is ~p ~n", [InsertedList]),
-%%    io:format("~n + the insert list is ~p ~n", [InsertList]),
-%%    io:format("~n - the remove list is ~p ~n", [RemoveList]),
-%%    io:format("~n-------the list is ~p ~n", [NewInsertedList]),
-%%    io:format("~n======the result range is ~p ~n", [IndexRes]),
+    IndexRes = po_tree_server:get_range(?MIN,?MAX,true,true,Ver),
     case compare_lists2( ordsets:to_list(ordsets:from_list(NewInsertedList)), IndexRes) of
         true ->
-%%            io:format("~n|||| comparision of list is true ~n"),
             construct_index(T, Ver+1, NewInsertedList);
         false ->
             false
@@ -43,13 +38,13 @@ construct_index([{InsertList, RemoveList} | T], Ver, InsertedList) ->
 insert([], _Ver) ->
     ok;
 insert([{RowId, Val} | T], Ver) ->
-    range_tree:insert({RowId, Val, Ver}),
+    po_tree_server:insert({RowId, Val, Ver}),
     insert(T, Ver).
 
 remove([], _Ver) ->
     ok;
 remove([{RowId, Val} | T], Ver) ->
-    range_tree:remove(RowId, Val, Ver),
+    po_tree_server:remove(RowId, Val, Ver),
     remove(T, Ver).
 
 
@@ -59,7 +54,8 @@ construct_list([], [{RowId, Val} | T], List) ->
     NewList = remove_from_list({Val, RowId}, List),
     construct_list([], T, NewList);
 construct_list([{RowId, Val} | T], RemoveList, List) ->
-    NewList = lists:sort([{Val, RowId}] ++ List),
+    UniqueList = remove_duplicate_rowId(List, RowId),
+    NewList = lists:sort([{Val, RowId}] ++ UniqueList),
     construct_list(T, RemoveList, NewList).
 
 remove_from_list({_Val, _RowId}, []) ->
@@ -96,4 +92,31 @@ contains({Val, RowId}, [{_IndexVal, _Rows} | IndexT]) ->
 %%% Generators %%%
 %%%%%%%%%%%%%%%%%%
 insert_remove_list_gen() ->
-    list({list({range(1, 1000000), range(1, 1000000)}), list({range(1, 1000000), range(1, 1000000)})}).
+    list({list({range(?MIN,?MAX), range(?MIN,?MAX)}), list({range(?MIN,?MAX), range(?MIN,?MAX)})}).
+
+prepare_list([]) ->
+    [];
+prepare_list([{Insert, Remove} | T]) ->
+    UniqueInsert = remove_duplicate_keys(Insert, []),
+    [{UniqueInsert, Remove}] ++ prepare_list(T).
+
+remove_duplicate_keys([], _Acc) ->
+    [];
+remove_duplicate_keys([{RowId, Val} | T], Acc) ->
+    case lists:member(RowId, Acc) of
+        true ->
+            remove_duplicate_keys(T, Acc);
+        false ->
+            [{RowId, Val}] ++ remove_duplicate_keys(T, [RowId]++Acc)
+    end.
+
+
+remove_duplicate_rowId([], _Row) ->
+    [];
+remove_duplicate_rowId([{Val, RowId} | T], Row) ->
+    case RowId =:= Row of
+        true ->
+            remove_duplicate_rowId(T, Row);
+        false ->
+            [{Val, RowId}] ++ remove_duplicate_rowId(T, Row)
+    end.
